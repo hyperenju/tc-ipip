@@ -1,0 +1,11 @@
+#tIPIP tunnel configuration
+tunnel:
+  # Transport network interface (connected to tunnel endpoint)
+  transport_nic: ens7
+
+  # Destination subnet to tunnel (CIDR notation)
+  dest_cidr: 192.168.1.0/24
+
+  # Tunnel endpoint addresses
+  local_addr: 10.0.0.1
+  remote_addr: 10.0.0.2
