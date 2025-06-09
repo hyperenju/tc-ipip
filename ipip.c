@@ -66,7 +66,7 @@ static __always_inline int validate_l2(void *data, void *data_end) {
     return eth->h_proto == bpf_htons(ETH_P_IP);
 }
 
-static __always_inline int validate_ip_header(struct iphdr *ip,
+static __always_inline int validate_l3(struct iphdr *ip,
                                               void *data_end) {
     if ((void *)(ip + 1) > data_end)
         return 0;
@@ -75,7 +75,7 @@ static __always_inline int validate_ip_header(struct iphdr *ip,
     return 1;
 }
 
-static __always_inline int is_dest_subnet(struct iphdr *ip) {
+static __always_inline int should_tunnel(struct iphdr *ip) {
     return (ip->daddr & bpf_htonl(DEST_SUBNET_MASK)) ==
            bpf_htonl(DEST_SUBNET_ADDR);
 }
@@ -110,26 +110,6 @@ static int encap(struct __sk_buff *skb) {
     return bpf_redirect_neigh(TRANSPORT_NIC_INDEX, NULL, 0, 0);
 }
 
-SEC("tc/encap")
-int tc_encap(struct __sk_buff *skb) {
-    void *data = (void *)(long)skb->data;
-    void *data_end = (void *)(long)skb->data_end;
-    struct ethhdr *eth = data;
-    struct iphdr *ip;
-
-    if (!validate_l2(data, data_end))
-        return TC_ACT_OK;
-
-    ip = (void *)(eth + 1);
-    if (!validate_ip_header(ip, data_end))
-        return TC_ACT_OK;
-
-    if (is_dest_subnet(ip))
-        return encap(skb);
-
-    return TC_ACT_OK;
-}
-
 static int decap(struct __sk_buff *skb) {
     int ret;
     void *data, *data_end;
@@ -158,18 +138,37 @@ static int decap(struct __sk_buff *skb) {
     return TC_ACT_OK;
 }
 
+
+SEC("tc/encap")
+int tc_encap(struct __sk_buff *skb) {
+    void *data = (void *)(long)skb->data;
+    void *data_end = (void *)(long)skb->data_end;
+    struct ethhdr *eth = data;
+    struct iphdr *ip = (void *)(eth + 1);
+
+    if (!validate_l2(data, data_end))
+        return TC_ACT_OK;
+
+    if (!validate_l3(ip, data_end))
+        return TC_ACT_OK;
+
+    if (should_tunnel(ip))
+        return encap(skb);
+
+    return TC_ACT_OK;
+}
+
 SEC("tc/decap")
 int tc_decap(struct __sk_buff *skb) {
     void *data = (void *)(long)skb->data;
     void *data_end = (void *)(long)skb->data_end;
     struct ethhdr *eth = data;
-    struct iphdr *outer_ip;
+    struct iphdr *outer_ip = (void *)(eth + 1);
 
     if (!validate_l2(data, data_end))
         return TC_ACT_OK;
 
-    outer_ip = (void *)(eth + 1);
-    if (!validate_ip_header(outer_ip, data_end))
+    if (!validate_l3(outer_ip, data_end))
         return TC_ACT_OK;
 
     if (outer_ip->protocol == IPPROTO_IPIP)
