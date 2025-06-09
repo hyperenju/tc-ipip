@@ -59,16 +59,6 @@ static __always_inline void fill_outer_ip(struct iphdr *outer_ip,
     outer_ip->check = calc_ipv4_checksum(outer_ip);
 }
 
-static __always_inline void init_fib_params(struct bpf_fib_lookup *fib_params,
-                                            struct __sk_buff *skb,
-                                            struct iphdr *iph, int ifindex) {
-    __builtin_memset(fib_params, 0, sizeof(*fib_params));
-    fib_params->family = AF_INET;
-    fib_params->ipv4_src = iph->saddr;
-    fib_params->ipv4_dst = iph->daddr;
-    fib_params->ifindex = ifindex;
-}
-
 static __always_inline int validate_l2(void *data, void *data_end) {
     struct ethhdr *eth = data;
     if ((void *)(eth + 1) > data_end)
@@ -88,41 +78,6 @@ static __always_inline int validate_ip_header(struct iphdr *ip,
 static __always_inline int is_dest_subnet(struct iphdr *ip) {
     return (ip->daddr & bpf_htonl(DEST_SUBNET_MASK)) ==
            bpf_htonl(DEST_SUBNET_ADDR);
-}
-
-static int fib_lookup_and_forward(struct __sk_buff *skb, struct ethhdr *eth,
-                                  struct iphdr *iph, int ifindex) {
-    struct bpf_fib_lookup fib_params;
-    int ret;
-
-    init_fib_params(&fib_params, skb, iph, ifindex);
-
-    ret = bpf_fib_lookup(skb, &fib_params, sizeof(fib_params), 0);
-
-    switch (ret) {
-    case BPF_FIB_LKUP_RET_SUCCESS:
-        __builtin_memcpy(eth->h_dest, fib_params.dmac, ETH_ALEN);
-        __builtin_memcpy(eth->h_source, fib_params.smac, ETH_ALEN);
-        return bpf_redirect(ifindex,
-                            ifindex == TUNNEL_NIC_INDEX ? BPF_F_INGRESS : 0);
-
-    case BPF_FIB_LKUP_RET_BLACKHOLE:
-    case BPF_FIB_LKUP_RET_UNREACHABLE:
-    case BPF_FIB_LKUP_RET_PROHIBIT:
-        bpf_printk("FIB lookup failed (%d), dropping packet", ret);
-        return TC_ACT_SHOT;
-
-    case BPF_FIB_LKUP_RET_NOT_FWDED:
-    case BPF_FIB_LKUP_RET_FWD_DISABLED:
-    case BPF_FIB_LKUP_RET_UNSUPP_LWT:
-    case BPF_FIB_LKUP_RET_NO_NEIGH:
-    case BPF_FIB_LKUP_RET_FRAG_NEEDED:
-    case BPF_FIB_LKUP_RET_NO_SRC_ADDR:
-        bpf_printk("FIB lookup failed (%d), passing to kernel", ret);
-        return TC_ACT_OK;
-    }
-
-    return TC_ACT_OK;
 }
 
 static int encap(struct __sk_buff *skb) {
@@ -152,8 +107,7 @@ static int encap(struct __sk_buff *skb) {
         return TC_ACT_OK;
 
     fill_outer_ip(outer_ip, inner_ip);
-
-    return fib_lookup_and_forward(skb, eth, outer_ip, TRANSPORT_NIC_INDEX);
+    return bpf_redirect_neigh(TRANSPORT_NIC_INDEX, NULL, 0, 0);
 }
 
 SEC("tc/encap")
@@ -201,7 +155,7 @@ static int decap(struct __sk_buff *skb) {
         return TC_ACT_OK;
 
     eth->h_proto = bpf_htons(ETH_P_IP);
-    return fib_lookup_and_forward(skb, eth, ip, TUNNEL_NIC_INDEX);
+    return TC_ACT_OK;
 }
 
 SEC("tc/decap")
