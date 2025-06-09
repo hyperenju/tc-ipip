@@ -103,7 +103,8 @@ static int fib_lookup_and_forward(struct __sk_buff *skb, struct ethhdr *eth,
     case BPF_FIB_LKUP_RET_SUCCESS:
         __builtin_memcpy(eth->h_dest, fib_params.dmac, ETH_ALEN);
         __builtin_memcpy(eth->h_source, fib_params.smac, ETH_ALEN);
-        return bpf_redirect(ifindex, 0);
+        return bpf_redirect(ifindex,
+                            ifindex == TUNNEL_NIC_INDEX ? BPF_F_INGRESS : 0);
 
     case BPF_FIB_LKUP_RET_BLACKHOLE:
     case BPF_FIB_LKUP_RET_UNREACHABLE:
